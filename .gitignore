@@ -1,0 +1,7 @@
+# exclude python and env files
+__pycache__
+venv
+.env
+
+# others
+todo.md
