@@ -1,13 +1,27 @@
 import os
 
-from typing import Annotated
+from typing import Annotated, Optional, List
 
-from fastapi import FastAPI, Body, HTTPException
+from fastapi import (
+    FastAPI,
+    Depends,
+    Body,
+    File,
+    UploadFile,
+    Form,
+    HTTPException,
+)
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from core.utils import check_folder_exists
-from core.enums import TargetType
+from core.enums import (
+    TargetType,
+    TARGET_TYPE_ARG_NAME,
+    POS_CLASS_LABEL_ARG_NAME,
+    NEG_CLASS_LABEL_ARG_NAME,
+    CLASS_LABELS_ARG_NAME,
+)
 from core.python_predictor import PredictResponse, PythonPredictor
 
 
@@ -15,6 +29,7 @@ load_dotenv()
 
 if "CODE_DIR" not in os.environ:
   raise RuntimeError("CODE_DIR not defined in environment variables.")
+
 
 app = FastAPI()
 
@@ -34,34 +49,80 @@ class Input(BaseModel):
     data: list
 
 
-@app.get("/")
-def main():
-    return {"Hello": "World"}
-
-
-@app.post("/predict", response_model=PredictResponse)
-def predict(
-    input: Annotated[Input, Body(embed=True)],
-    target_type: Annotated[TargetType, Body(embed=True)] = TargetType.BINARY
+async def common_predict_params(
+    target_type: Annotated[TargetType, Form()],
+    input: Annotated[Input | None, Body(embed=True)] = None,
+    input_file: Annotated[UploadFile | None, File()] = None,
+    positive_class_label: Annotated[Optional[str], Form()] = None,
+    negative_class_label: Annotated[Optional[str], Form()] = None,
+    class_labels: Annotated[List[str] | None, Form()] = None,
+    output_destination: Annotated[Optional[str], Form()] = None
 ):
+    return {
+        TARGET_TYPE_ARG_NAME: target_type,
+        POS_CLASS_LABEL_ARG_NAME: positive_class_label,
+        NEG_CLASS_LABEL_ARG_NAME: negative_class_label,
+        CLASS_LABELS_ARG_NAME: class_labels,
+        "input": input,
+        "input_file": input_file,
+        "output_destination": output_destination,
+    }
+
+
+commons_predict_dep = Annotated[dict, Depends(common_predict_params)]
+
+
+def init_predictor(params):
     code_dir = os.environ['CODE_DIR']
 
     if not check_folder_exists(code_dir):
         raise HTTPException(status_code=404, detail=f"The following code_dir {code_dir} cannot be found")
 
     predictor = PythonPredictor()
-    predictor.configure({"code_dir": code_dir, "target_type": target_type})
+    params["code_dir"] = code_dir
+    predictor.configure(params)
+
+    return predictor
+
+
+@app.get("/")
+def main():
+    return {"Hello": "World"}
+
+
+@app.post("/predict", response_model=PredictResponse)
+def predict(commons: commons_predict_dep):
+    predictor = init_predictor(commons)
 
     return predictor.predict(
-        binary_data=input,
-        mimetype="application/json"
+        target_type=commons.get("target_type"),
+        binary_data=commons.get("input"),
+        mimetype="application/json",
+    )
+
+
+@app.post("/predict-file", response_model=PredictResponse)
+async def predict_file(commons: commons_predict_dep):
+    predictor = init_predictor(commons)
+
+    return predictor.predict(
+        target_type=commons.get("target_type"),
+        binary_data=await commons.get("input_file").read(),
+        mimetype=commons.get("input_file").content_type,
     )
 
 
 @app.post("/batch-predict")
-def batch_predict():
-    batch_preds = {}
-    return batch_preds
+async def batch_predict(commons: commons_predict_dep):
+    # TODO: save predictions to file
+    predictor = init_predictor(commons)
+
+    return predictor.predict(
+        target_type=commons.get("target_type"),
+        binary_data=await commons.get("input_file").read(),
+        mimetype=commons.get("input_file").content_type,
+        output_destination=commons.get("output_destination"),
+    )
 
 
 @app.post("/transform")

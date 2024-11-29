@@ -1,10 +1,16 @@
-from typing import Any, Optional
+from typing import Any, Optional, List
 
 from numpydantic import NDArray, Shape
 from pydantic import BaseModel
 
 from core.simpleml import ModelAdapter
-from core.enums import TargetType
+from core.enums import (
+    TargetType,
+    TARGET_TYPE_ARG_NAME,
+    POS_CLASS_LABEL_ARG_NAME,
+    NEG_CLASS_LABEL_ARG_NAME,
+    CLASS_LABELS_ARG_NAME,
+)
 
 
 class PredictResponse(BaseModel):
@@ -16,25 +22,46 @@ class PredictResponse(BaseModel):
     predictions: predictions returned by the model.
     columns: list of columns.
     """
-    predictions: NDArray[Shape["*, 1"], int]
-    columns: Optional[NDArray[Shape["1"], Any]] = None
+    predictions: NDArray[Shape["*, *"], float]
+    columns: Optional[NDArray[Shape["* x"], Any]] = None
 
 
 class PythonPredictor:
-    def __init__(self):
+    def __init__(
+        self,
+        target_type: TargetType = None,
+        positive_class_label: Optional[str] = None,
+        negative_class_label: Optional[str] = None,
+        class_labels: Optional[List[str]] = None,
+    ):
+        self.target_type = target_type
+        self.positive_class_label = positive_class_label
+        self.negative_class_label = negative_class_label
+        self.class_labels = class_labels
         self._model_adapter = None
 
 
     def configure(self, params):
-        target_type = TargetType(params.get("target_type"))
-        code_dir = params.get("code_dir")
+        self.positive_class_label = params.get(POS_CLASS_LABEL_ARG_NAME)
+        self.negative_class_label = params.get(NEG_CLASS_LABEL_ARG_NAME)
+        self.class_labels = params.get(CLASS_LABELS_ARG_NAME)
+        self.target_type = TargetType(params.get(TARGET_TYPE_ARG_NAME))
+        self.code_dir = params.get("code_dir")
 
-        self._model_adapter = ModelAdapter(code_dir=code_dir, target_type=target_type)
+        self._model_adapter = ModelAdapter(code_dir=self.code_dir, target_type=self.target_type)
         self._model_adapter.load_custom_hooks()
 
         self._model = self._model_adapter.load_model_from_artifact()
 
 
-    def predict(self, **kwargs):
+    def predict(self, **kwargs) -> PredictResponse:
+        kwargs[TARGET_TYPE_ARG_NAME] = self.target_type
+        if self.positive_class_label is not None and self.negative_class_label is not None:
+            kwargs[POS_CLASS_LABEL_ARG_NAME] = self.positive_class_label
+            kwargs[NEG_CLASS_LABEL_ARG_NAME] = self.negative_class_label
+        if self.class_labels:
+            kwargs[CLASS_LABELS_ARG_NAME] = self.class_labels
+
         preds = self._model_adapter.predict(self._model, **kwargs)
+
         return PredictResponse(predictions=preds.values, columns=preds.columns.values)

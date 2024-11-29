@@ -1,4 +1,7 @@
 fastapi[standard]
+python-multipart
 python-dotenv
 pandas
 numpydantic
+# frameworks
+scikit-learn

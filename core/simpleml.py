@@ -1,3 +1,4 @@
+import io
 import sys
 import logging
 from pathlib import Path
@@ -12,6 +13,7 @@ from core.enums import (
     TargetType,
 )
 from core.utils import get_fullpath
+from core.artifact_predictors.sklearn_predictor import SKLearnPredictor
 
 
 class ModelAdapterError(Exception):
@@ -28,8 +30,13 @@ class ModelAdapter():
     ):
         self.code_dir = code_dir
         self._target_type = target_type
-        self._predictor = None
+        self._predictor_to_use = None
         self._hooks = {hook: None for hook in CustomHooks.ALL_PREDICT}
+
+        self._artifact_predictors = [
+            SKLearnPredictor(),
+        ]
+
         self._logger = logging.getLogger(LOGGER_NAME_PREFIX + "." + self.__class__.__name__)
 
 
@@ -55,8 +62,14 @@ class ModelAdapter():
 
 
     def _read_structured_input_data_df(self, binary_data, mimetype) -> pd.DataFrame:
-        # convert json data into df
-        return
+        # FIXME: handle mimetype
+        try:
+            df = pd.read_csv(io.BytesIO(binary_data))
+        except UnicodeDecodeError:
+            self._logger.error("A non UTF-8 encoding was encountered when opening the data.")
+            raise ModelAdapterError("Supplied CSV input file encoding must be UTF-8.")
+
+        return df
 
 
     def preprocess(self, data, model: Any = None) -> pd.DataFrame:
@@ -90,7 +103,7 @@ class ModelAdapter():
                 self._log_and_raise_error(exc, "Model 'score' hook failed to make predictions.")
         else:
             try:
-                preds_df = self._predictor_to_use.predict(data, model, **kwargs)
+                preds_df, model_labels = self._predictor_to_use.predict(data, model, **kwargs)
             except Exception as exc:
                 self._log_and_raise_error(exc, "Failed to make predictions.")
 
@@ -136,20 +149,21 @@ class ModelAdapter():
             model_artifact_file = self._detect_model_artifact_file()
             self._model = self._load_model_via_predictors(model_artifact_file)
 
-        # If no score hook is given, find a predictor that can handle the mdel
-        if (
-            self._target_type not in [TargetType.TRANSFORM, TargetType.UNSTRUCTURED]
-            and not self.has_custom_hook(CustomHooks.SCORE)
-        ):
+        if (self._no_hook_to_run_score()):
             self._find_predictor_to_use()
 
-        if (
-            self._target_type == TargetType.TRANSFORM
-            and not self.has_custom_hook(CustomHooks.SCORE)
-        ):
+        if (self._no_hook_to_run_transform()):
             raise ModelAdapter("A transform task requires a user-defined hook to run transformations.")
 
         return self._model
+
+
+    def _no_hook_to_run_score(self):
+        return self._target_type not in [TargetType.TRANSFORM, TargetType.UNSTRUCTURED] and not self.has_custom_hook(CustomHooks.SCORE)
+
+
+    def _no_hook_to_run_transform(self) -> bool:
+        return self._target_type == TargetType.TRANSFORM and not self.has_custom_hook(CustomHooks.TRANSFORM)
 
 
     def _load_model_via_hook(self):
@@ -157,15 +171,82 @@ class ModelAdapter():
 
 
     def _detect_model_artifact_file(self):
-        pass
+        supported_extensions = [p.artifact_extension.lower() for p in self._artifact_predictors]
+        artifact_file = None
+        files = get_fullpath(self.code_dir).rglob("*")
+
+        for file in files:
+            # check if file has the supported extensions
+            if file.suffix.lower() in supported_extensions:
+                if artifact_file:
+                    raise ModelAdapterError(
+                        "Multiple serialized model files have been found. Remove additional artifacts"
+                        "or define custom.load_model()\n"
+                        f"Retrieved artifacts are {files}"
+                    )
+                artifact_file = str(file)
+
+        if not artifact_file:
+            raise ModelAdapterError(
+                f"Couldn't find any model artifact file in: {self.code_dir} supported by default predictors.\n"
+                f"Only the following files extensions are supported {supported_extensions}"
+            )
+
+        self._logger.debug(f"model_artifact_file: {artifact_file}")
+        return artifact_file
 
 
-    def _load_model_via_predictors(self):
-        pass
+    def _load_model_via_predictors(self, model_artifact_file):
+        model = None
+        predictors_for_artifact = []
+
+        for pred in self._artifact_predictors:
+            if pred.is_artifact_supported(model_artifact_file):
+                predictors_for_artifact.append(pred)
+
+            if pred.can_load_artifact(model_artifact_file):
+                try:
+                    model = pred.load_model_from_artifact(model_artifact_file)
+                except Exception as exc:
+                    self._log_and_raise_error(exc, "Could not load model from artifact file.")
+                # stop the loop because model was loaded
+                break
+
+        if model is None:
+            if len(predictors_for_artifact) > 0:
+                framework_err = f"""
+                The following frameworks support the loaded model artifact: {model_artifact_file}"
+                but no model could be loaded. Check if requirements are missing."
+                """
+                for pred in predictors_for_artifact:
+                    framework_err += f"Framework: {pred.name}, requirements: {pred.framework_requirements()}"
+
+                raise ModelAdapterError(framework_err)
+            else:
+                raise ModelAdapterError(
+                    f"Could not load model from artifact file {model_artifact_file}"
+                )
+
+        self._model = model
+        return model
 
 
-    def _find_predictor_use(self):
-        pass
+    def _find_predictor_to_use(self) -> bool:
+        self._predictor_to_use = None
+
+        for pred in self._artifact_predictors:
+            if pred.can_use_model(self._model):
+                self._predictor_to_use = pred
+                break
+
+        if self._no_predictor_to_use_found():
+            raise ModelAdapter(f"Could not find a framework to handle the loaded model and no **{CustomHooks.SCORE}** hook is provided in custom.py")
+
+        self._logger.debug(f"Predictor to use: {self._predictor_to_use.name}")
+
+
+    def _no_predictor_to_use_found(self) -> bool:
+        return not self._predictor_to_use and not self._hooks[CustomHooks.SCORE]
 
 
     def has_custom_hook(self, hook_type: CustomHooks) -> bool:
