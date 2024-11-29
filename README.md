@@ -1,17 +1,32 @@
 # Simpleml
----
+> :warning: **If you are cloning**: Keep in mind this library is a Work-In-Progress. Some functionalities are yet to be fully implemented.
+
+## Content
+1. [Installation](#installation)
+1. [Guardrails for Data Scientists](#guardrails-for-data-scientists)
+1. [Make Predictions](#make-predictions)
+1. [Create a custom model template](#create-a-custom-model-template)
+    1. [Data format](#data-format)
+    1. [Available Model Hooks](#available-model-hooks)
+1. [API Endpoints](#api-endpoints)
+1. [CLI Tool](#cli-tool)
+1. [Supported models](#supported-models)
+1. [Supported Artifacts](#supported-artifacts)
+
+
 ## Installation
-1. Git clone the current repo. The below commands will be executed from the repo's folder.
-2. Create and active your virtual environement
+1. Git clone the current repo `git clone https://github.com/chriys/simpleml.git`.
+1. Inside the cloned repo, create and active your virtual environement
     ```
     python3 -m venv env
     source venv/bin/activate
     ```
-3. Install pip dependencies
+1. Install pip dependencies
     ```
     pip install -r requirements.txt
     ```
-3. Create and `.env` file. You can copy `.example-env` and rename it to `.env`
+1. Create and `.env` file. You can copy `.example-env` and rename it to `.env`
+1. Run `fastapi dev app.py` to start the server locally
 
 
 ## Guardrails for Data Scientists
@@ -37,8 +52,33 @@ and minimize errors during training and testing phase.
 
 
 ## Make Predictions
+There are essentially to way to make predictions:
+- Using the API endpoints
+- Using the CLI tool (Work In Progress).
+For each one of the above steps, you need to create a **model template**.
 
-### Create Your Model Template
+## Create a custom model template
+1. Inside `/model_templates`, create a folder where you will place your custom code and files.
+1. Inside your model's folder, create a `custom.py` file and add the hook you'll need the library to call.
+    - You can ommit this step if your serialized model extension is supported and if you don't need additionnal hooks.
+1. Set the `CODE_DIR` vars inside `.env`.
+    - If your model has a similar structure as below, set the variable as follow: `CODE_DIR=model_templates/my_super_model`
+    - `CODE_DIR` also supports absolute paths. (i.e: `CODE_DIR=/Users/me/simpleml/model_templates/my_super_model`)
+
+```
+    Below is what the folder structure can look like.
+    ...
+    |
+    |-- model_templates
+    |   |-- README.md
+    |   |-- ..
+    `----- my_super_model
+           |-- keras_model.h5
+           |-- custom.py
+           `---data
+               |-- iris.csv
+               `-- abc.csv
+```
 
 ### Data format
 When working with structured models, the supported data as files is `csv`.
@@ -69,27 +109,16 @@ See the accepted method below to have an idea of how to use them.
 
 
 ## Supported models
+- **SCIKIT-LEARN**
+
 
 ## Supported Artifacts
 
 Even if you do not define a `custom.py` file, the library will discover artifacts it knows how to use to score your data.
 
-You only need to set `CODE_DIR` to be your model's directory and make sure your artifact is in there.
+You only need to set `CODE_DIR` found in your `.env` to be your model's directory and make sure your artifact is in there.
 
-    i.e.: You're working on a model and have create a model template containing your artifact.
-    simpleml
-    |   app.py
-    |   README.md
-    |---core
-    |   ..
-    |---model_templates
-    |------my_super_model
-           |   my_keras_model.h5
-
-    Your `.env` file should have this entry `CODE_DIR=model_templates/my_super_model/`.
-
-
-If needed, you can override how a `.pkl` model scores data by provided a custom hook like `score()` or `transform()`.
+If needed, you can override how a serialized model scores data by providing a custom hook like `score()` or `transform()`.
 
 Below is a list of supported model artifacts:
 
