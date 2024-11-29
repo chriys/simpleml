@@ -1,5 +1,5 @@
 # Simpleml
-> :warning: **If you are cloning**: Keep in mind this library is a Work-In-Progress. Some functionalities are yet to be fully implemented.
+> :warning: **If you are cloning this repo**: Keep in mind this library is a Work-In-Progress. Some functionalities are yet to be fully implemented.
 
 ## Content
 1. [Installation](#installation)
